@@ -18,10 +18,24 @@ model_list:
 # Direct integration — static PAT, no proxy layer
 # ============================================================
 mcp_servers:
+  # ── Remote HTTP endpoint, Bearer token auth ──────────────────
   github:
     url: "https://api.githubcopilot.com/mcp/"
     auth_type: "bearer_token"
     auth_value: "os.environ/GITHUB_TOKEN"
+
+  # ── Local stdio: fetches any URL, no auth needed ─────────────
+  fetch:
+    command: "uvx"
+    args: ["mcp-server-fetch"]
+
+  # ── Local stdio: read/write project files, no auth needed ────
+  filesystem:
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-filesystem"
+      - "C:\\Users\\SAGAR\\OneDrive\\Desktop\\Sagar\\Cesta Inc\\GapAnalysis"
 
 general_settings:
   master_key: "sk-local-test-key"
