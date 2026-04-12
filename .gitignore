@@ -1,8 +1,9 @@
 # Environment variables — never commit secrets
 .env
 
-# Python virtual environment
+# Python virtual environments
 venv/
+venv_fetch/
 __pycache__/
 *.pyc
 *.pyo

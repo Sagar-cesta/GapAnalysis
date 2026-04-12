@@ -24,14 +24,20 @@ mcp_servers:
     auth_type: "bearer_token"
     auth_value: "os.environ/GITHUB_TOKEN"
 
+  # ── Remote HTTP endpoint, token embedded in URL ───────────────
+  zapier:
+    url: "os.environ/ZAPIER_MCP_URL"
+
   # ── Local stdio: fetches any URL, no auth needed ─────────────
   fetch:
-    command: "uvx"
-    args: ["mcp-server-fetch"]
+    transport: stdio
+    command: "C:\\Users\\SAGAR\\OneDrive\\Desktop\\Sagar\\Cesta Inc\\GapAnalysis\\venv_fetch\\Scripts\\python.exe"
+    args: ["-m", "mcp_server_fetch"]
 
   # ── Local stdio: read/write project files, no auth needed ────
   filesystem:
-    command: "npx"
+    transport: stdio
+    command: "C:\\Program Files\\nodejs\\npx.cmd"
     args:
       - "-y"
       - "@modelcontextprotocol/server-filesystem"
