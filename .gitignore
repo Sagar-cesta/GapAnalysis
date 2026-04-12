@@ -1,0 +1,16 @@
+# Environment variables — never commit secrets
+.env
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# LiteLLM local database
+*.db
+litellm.db
+
+# OS files
+.DS_Store
+Thumbs.db

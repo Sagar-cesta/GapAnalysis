@@ -1,0 +1,28 @@
+# ============================================================
+# LiteLLM PROXY SERVER CONFIGURATION
+# ============================================================
+
+model_list:
+  - model_name: gpt-4o-mini
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+      api_key: os.environ/OPENAI_API_KEY
+
+# ============================================================
+# MCP SERVERS
+# Direct integration — static PAT, no proxy layer
+# ============================================================
+mcp_servers:
+  github:
+    url: "https://api.githubcopilot.com/mcp/"
+    auth_type: "bearer_token"
+    auth_value: "os.environ/GITHUB_TOKEN"
+
+general_settings:
+  master_key: "sk-local-test-key"
+  database_url: "postgresql://neondb_owner:npg_iwO1V4esGyXQ@ep-patient-leaf-andou10n.c-6.us-east-1.aws.neon.tech/neondb?sslmode=require"
