@@ -1,0 +1,13 @@
+.env
+.git
+.gitignore
+venv/
+venv_fetch/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+step1_hello_litellm.py
+step2_github_mcp.py
+step3_fetch_mcp.py
+step4_filesystem_mcp.py

@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 
 load_dotenv()
 
-LITELLM_BASE_URL = "http://localhost:4000"
+LITELLM_BASE_URL = os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
 LITELLM_API_KEY  = os.getenv("LITELLM_MASTER_KEY", "sk-local-test-key")
 MODEL            = "gpt-4o-mini"
 

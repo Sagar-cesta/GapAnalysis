@@ -1,0 +1,38 @@
+services:
+
+  # ── LiteLLM Proxy (port 4000) ─────────────────────────────────────────────
+  # Manages all MCP servers, handles OAuth2 token fetch for PinkFish,
+  # and exposes /v1/mcp/tools + /mcp/call_tool for the chat backend.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    ports:
+      - "4000:4000"
+    volumes:
+      - ./litellm_config.yaml:/app/config.yaml:ro
+    env_file:
+      - .env
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/readiness')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  # ── Chat UI Backend (port 5000) ───────────────────────────────────────────
+  # FastAPI app: serves index.html, runs agentic loop, routes pinkfish_*
+  # tool calls directly to PinkFish (SSE transport gap workaround).
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      # Override so app.py hits the litellm container, not localhost
+      LITELLM_BASE_URL: http://litellm:4000
+    depends_on:
+      litellm:
+        condition: service_healthy
