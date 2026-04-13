@@ -28,20 +28,55 @@ mcp_servers:
   zapier:
     url: "os.environ/ZAPIER_MCP_URL"
 
-  # ── Local stdio: fetches any URL, no auth needed ─────────────
-  fetch:
-    transport: stdio
-    command: "C:\\Users\\SAGAR\\OneDrive\\Desktop\\Sagar\\Cesta Inc\\GapAnalysis\\venv_fetch\\Scripts\\python.exe"
-    args: ["-m", "mcp_server_fetch"]
+  # ── Remote HTTP, OAuth2 PKCE (browser-only) ──────────────────
+  # GAP: Figma's remote MCP rejects PATs — requires interactive
+  # browser OAuth2 PKCE login. No headless/server-to-server support.
+  figma:
+    url: "https://mcp.figma.com/mcp"
+    auth_type: "bearer_token"
+    auth_value: "os.environ/FIGMA_TOKEN"
 
-  # ── Local stdio: read/write project files, no auth needed ────
-  filesystem:
-    transport: stdio
-    command: "C:\\Program Files\\nodejs\\npx.cmd"
-    args:
-      - "-y"
-      - "@modelcontextprotocol/server-filesystem"
-      - "C:\\Users\\SAGAR\\OneDrive\\Desktop\\Sagar\\Cesta Inc\\GapAnalysis"
+  # ── Remote HTTP, OAuth2 client_credentials ────────────────────
+  # LiteLLM handles token fetch, cache, and refresh automatically
+  pinkfish_websearch:
+    url: "https://mcp.app.pinkfish.ai/web-search"
+    auth_type: oauth2
+    oauth2_flow: client_credentials
+    client_id: "os.environ/PINKFISH_CLIENT_ID"
+    client_secret: "os.environ/PINKFISH_CLIENT_SECRET"
+    token_url: "https://app-api.app.pinkfish.ai/oauth/token"
+    scopes:
+      - "org:133738997602"
+
+  pinkfish_weather:
+    url: "https://mcp.app.pinkfish.ai/weather"
+    auth_type: oauth2
+    oauth2_flow: client_credentials
+    client_id: "os.environ/PINKFISH_CLIENT_ID"
+    client_secret: "os.environ/PINKFISH_CLIENT_SECRET"
+    token_url: "https://app-api.app.pinkfish.ai/oauth/token"
+    scopes:
+      - "org:133738997602"
+
+  pinkfish_salesforce:
+    url: "https://mcp.app.pinkfish.ai/salesforce"
+    auth_type: oauth2
+    oauth2_flow: client_credentials
+    client_id: "os.environ/PINKFISH_CLIENT_ID"
+    client_secret: "os.environ/PINKFISH_CLIENT_SECRET"
+    token_url: "https://app-api.app.pinkfish.ai/oauth/token"
+    scopes:
+      - "org:133738997602"
+
+  pinkfish_excel:
+    url: "https://mcp.app.pinkfish.ai/microsoft-excel"
+    auth_type: oauth2
+    oauth2_flow: client_credentials
+    client_id: "os.environ/PINKFISH_CLIENT_ID"
+    client_secret: "os.environ/PINKFISH_CLIENT_SECRET"
+    token_url: "https://app-api.app.pinkfish.ai/oauth/token"
+    scopes:
+      - "org:133738997602"
 
 general_settings:
   master_key: "sk-local-test-key"

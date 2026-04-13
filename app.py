@@ -6,11 +6,23 @@ FastAPI server that:
   2. Exposes /api/chat   — runs the full agentic loop and streams events back
   3. Serves  index.html  at /
 
+Tool routing:
+  - github-* / zapier-* → LiteLLM /mcp/call_tool (SSE streaming, works fine)
+  - pinkfish_* tools    → PinkFish directly (plain JSON-RPC, bypasses LiteLLM)
+    GAP: LiteLLM's MCP client uses Streamable HTTP (SSE) for tool calls.
+         PinkFish returns plain JSON — not SSE — so LiteLLM cancels the call.
+         Workaround: app.py fetches a PinkFish JWT using client_credentials and
+         calls the PinkFish MCP endpoint directly, bypassing LiteLLM's transport.
+
 Run:  python app.py
 """
 
 import json
+import logging
 import os
+import re
+import time
+import urllib.parse
 from typing import AsyncGenerator
 
 import httpx
@@ -21,13 +33,18 @@ from fastapi.responses import FileResponse, StreamingResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+log = logging.getLogger(__name__)
+
 load_dotenv()
 
 LITELLM_BASE_URL = "http://localhost:4000"
 LITELLM_API_KEY  = os.getenv("LITELLM_MASTER_KEY", "sk-local-test-key")
 MODEL            = "gpt-4o-mini"
 
-SYSTEM_PROMPT = """You are a helpful assistant with access to real-world tools via MCP (Model Context Protocol).
+def build_system_prompt() -> str:
+    salesforce_pcid = os.getenv("PINKFISH_SALESFORCE_PCID", "")
+    excel_pcid      = os.getenv("PINKFISH_EXCEL_PCID", "")
+    return f"""You are a helpful assistant with access to real-world tools via MCP (Model Context Protocol).
 
 IMPORTANT RULES:
 - You MUST use the available tools whenever a question involves real-world data, live information, files, repositories, calendars, or the web.
@@ -35,9 +52,18 @@ IMPORTANT RULES:
 - NEVER invent or guess API keys. If a service requires an API key you don't have, use a free alternative instead.
 - For GitHub questions: use github-* tools (e.g. github-get_me to get the current user, github-search_repositories to find repos).
 - For web content / scraping: use fetch-fetch.
-- For files/directories: use filesystem-* tools.
 - For calendar/scheduling: use zapier-google_calendar_* tools.
 - Always prefer tool results over your training knowledge for any live or user-specific data.
+
+PINKFISH TOOLS — CONNECTION IDs (PCID) ARE PRE-CONFIGURED, USE THEM EXACTLY:
+- Weather (pinkfish_weather-*): Pass city name only, no country/state abbreviation.
+    ✅ Correct: {{"city": "Raleigh"}}
+    ❌ Wrong:   {{"city": "Raleigh, NC"}}  or  {{"city": "Raleigh,NC"}}
+- Web search (pinkfish_websearch-*): Use as normal, no PCID needed.
+- Salesforce (pinkfish_salesforce-*): ALWAYS pass PCID="{salesforce_pcid}" exactly.
+    Example: {{"PCID": "{salesforce_pcid}", "query": "SELECT Id, Name FROM Account LIMIT 5"}}
+- Excel (pinkfish_excel-*): ALWAYS pass PCID="{excel_pcid}" exactly.
+    Example: {{"PCID": "{excel_pcid}"}}
 
 BLOCKED SITES — NEVER fetch these (robots.txt blocks automated access):
 - google.com, google.co.*, news.google.com, youtube.com
@@ -46,24 +72,17 @@ BLOCKED SITES — NEVER fetch these (robots.txt blocks automated access):
 - Any URL that starts with https://www.google
 
 FREE SERVICES TO USE (no API key needed):
-- Weather: You MUST use wttr.in. NEVER use openweathermap, weatherapi.com, weatherstack, or any other weather service.
-  Exact URL format: https://wttr.in/CITY_NAME?format=j1
-  Examples:
-    Raleigh NC  → https://wttr.in/Raleigh,NC?format=j1
-    New York    → https://wttr.in/New+York?format=j1
-    London      → https://wttr.in/London?format=j1
-  The response is JSON with current_condition[0] containing temp_F, temp_C, weatherDesc, humidity, windspeedMiles.
 - IP info: https://ipinfo.io/json
-- Public holidays: https://date.nager.at/api/v3/PublicHolidays/{year}/{countryCode}
+- Public holidays: https://date.nager.at/api/v3/PublicHolidays/{{year}}/{{countryCode}}
 - Current time / date: https://worldtimeapi.org/api/timezone/America/New_York
 - News (AI/Tech): https://hnrss.org/frontpage  (Hacker News — RSS, always open)
 - News (BBC Tech): https://feeds.bbci.co.uk/news/technology/rss.xml
 - News (TechCrunch): https://techcrunch.com/feed/
 - News (any topic search): https://hnrss.org/search?q=TOPIC&count=5
-  Example AI news: https://hnrss.org/search?q=artificial+intelligence&count=5
 - Wikipedia summary: https://en.wikipedia.org/api/rest_v1/page/summary/TOPIC
-  Example: https://en.wikipedia.org/api/rest_v1/page/summary/Docker_(software)
 """
+
+SYSTEM_PROMPT = build_system_prompt()
 
 app = FastAPI(title="MCP Chat")
 app.add_middleware(
@@ -104,8 +123,6 @@ def rewrite_fetch_url(url: str, original_args: dict) -> tuple[str, str | None]:
     if not any(b in url_lower for b in BLOCKED_DOMAINS):
         return url, None  # URL is fine
 
-    # Extract a search keyword from the original URL
-    import re, urllib.parse
     query = ""
     for param in ["q", "query", "search", "blob", "keyword"]:
         match = re.search(rf"[?&]{param}=([^&]+)", url_lower)
@@ -130,8 +147,9 @@ def rewrite_fetch_url(url: str, original_args: dict) -> tuple[str, str | None]:
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 async def fetch_mcp_tools() -> list[dict]:
+    """Fetch all MCP tools from LiteLLM (which manages all servers)."""
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
                 f"{LITELLM_BASE_URL}/v1/mcp/tools",
                 headers={"Authorization": f"Bearer {LITELLM_API_KEY}"},
@@ -139,7 +157,7 @@ async def fetch_mcp_tools() -> list[dict]:
             resp.raise_for_status()
         raw = resp.json().get("tools", [])
     except Exception:
-        return []   # LiteLLM not reachable — return empty list gracefully
+        return []
     return [
         {
             "type": "function",
@@ -153,7 +171,103 @@ async def fetch_mcp_tools() -> list[dict]:
     ]
 
 
+# ── PinkFish direct-call workaround ───────────────────────────────────────────
+#
+# GAP: LiteLLM's MCP client uses Streamable HTTP (SSE) for tool *calls*.
+#      PinkFish returns plain JSON-RPC — not SSE — so LiteLLM cancels the call.
+#      Fix: app.py fetches a fresh JWT via OAuth2 client_credentials and calls
+#      the PinkFish MCP endpoint directly, getting a plain JSON response instead.
+#
+# LiteLLM still owns tool *listing* (OAuth2 token fetch/cache via config).
+# We only bypass LiteLLM for the actual tool *execution* step.
+
+# Map LiteLLM server name → PinkFish MCP base URL
+PINKFISH_SERVER_URLS: dict[str, str] = {
+    "pinkfish_websearch":  "https://mcp.app.pinkfish.ai/web-search",
+    "pinkfish_weather":    "https://mcp.app.pinkfish.ai/weather",
+    "pinkfish_salesforce": "https://mcp.app.pinkfish.ai/salesforce",
+    "pinkfish_excel":      "https://mcp.app.pinkfish.ai/microsoft-excel",
+}
+
+# Simple in-process token cache (token string + expiry timestamp)
+_pf_token: str = ""
+_pf_token_expiry: float = 0.0
+
+
+async def _get_pinkfish_token() -> str:
+    """Return a valid PinkFish JWT, fetching a fresh one if expired."""
+    global _pf_token, _pf_token_expiry
+
+    # Reuse if still valid (with 60s buffer)
+    if _pf_token and time.time() < _pf_token_expiry - 60:
+        return _pf_token
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.post(
+            "https://app-api.app.pinkfish.ai/oauth/token",
+            data={
+                "grant_type":    "client_credentials",
+                "client_id":     os.environ["PINKFISH_CLIENT_ID"],
+                "client_secret": os.environ["PINKFISH_CLIENT_SECRET"],
+                "scope":         f"org:{os.environ['PINKFISH_ORG_ID']}",
+            },
+        )
+        r.raise_for_status()
+
+    body = r.json()
+    _pf_token = body["access_token"]
+    _pf_token_expiry = time.time() + body.get("expires_in", 3600)
+    log.info("PinkFish token refreshed (expires in %ds)", body.get("expires_in", 3600))
+    return _pf_token
+
+
+async def _execute_pinkfish_tool(server: str, tool_name: str, arguments: dict) -> str:
+    """
+    Call a PinkFish MCP tool directly using plain JSON-RPC (no SSE).
+    PinkFish returns:  {"result": {"content": [{"type": "text", "text": "..."}]}}
+    """
+    base_url = PINKFISH_SERVER_URLS[server]
+    token    = await _get_pinkfish_token()
+
+    payload = {
+        "jsonrpc": "2.0",
+        "id":      "1",
+        "method":  "tools/call",
+        "params":  {"name": tool_name, "arguments": arguments},
+    }
+
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(
+            base_url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type":  "application/json",
+                "Accept":        "application/json",   # PinkFish returns plain JSON, not SSE
+            },
+            json=payload,
+        )
+        r.raise_for_status()
+
+    body    = r.json()
+    result  = body.get("result", body)
+    content = result.get("content", [])
+    parts   = [c.get("text", "") for c in content if c.get("type") == "text"]
+    return "\n".join(parts) if parts else json.dumps(result)
+
+
 async def execute_tool(name: str, arguments: dict) -> str:
+    """
+    Route tool calls:
+      pinkfish_* → direct JSON-RPC to PinkFish (SSE gap workaround)
+      everything else → LiteLLM /mcp/call_tool (SSE streaming)
+    """
+    # pinkfish_websearch-search_amazon  →  server=pinkfish_websearch, tool=search_amazon
+    for server in PINKFISH_SERVER_URLS:
+        if name.startswith(f"{server}-"):
+            tool_name = name[len(server) + 1:]   # strip "pinkfish_websearch-"
+            return await _execute_pinkfish_tool(server, tool_name, arguments)
+
+    # ── Standard path: all other servers go through LiteLLM ──────────────────
     payload = {
         "jsonrpc": "2.0",
         "id":      "1",
@@ -197,6 +311,7 @@ def sse(event: str, data: dict) -> str:
 @app.get("/")
 async def index():
     return FileResponse("index.html")
+
 
 
 @app.get("/api/tools")
